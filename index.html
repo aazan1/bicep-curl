@@ -4,335 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hammer Curl Pose Detection</title>
-    <style>
-        body { text-align: center; font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .container { position: relative; width: 100%; height: 100vh; }
-        video, canvas { position: absolute; left: 50%; transform: translateX(-50%); top: 10%; }
-        #warning { position: absolute; top: 5%; left: 50%; transform: translateX(-50%); color: red; font-size: 24px; font-weight: bold; }
-        #controls { position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%); background-color: rgba(0,0,0,0.5); color: white; padding: 10px 20px; border-radius: 10px; }
-        #results { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0,0,0,0.8); color: white; padding: 20px; border-radius: 10px; display: none; z-index: 10; min-width: 300px; }
-        .button { padding: 10px 20px; margin: 0 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        .start { background-color: #4CAF50; color: white; }
-        .stop { background-color: #f44336; color: white; }
-        .reset { background-color: #2196F3; color: white; }
-        .close { background-color: #555; color: white; margin-top: 15px; }
-        .timer { font-size: 24px; margin: 10px 0; }
-        .hidden { display: none; }
-        #loading-screen { 
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            background-color: rgba(0,0,0,0.8); 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            z-index: 1000; 
-            color: white;
-            flex-direction: column;
-        }
-        .loader {
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #3498db;
-            border-radius: 50%;
-            width: 60px;
-            height: 60px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 20px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-    </style>
-</head>
-<body>
-    <!-- Loading Screen -->
-    <div id="loading-screen">
-        <div class="loader"></div>
-        <p id="loading-text">Loading pose detection model...</p>
-    </div>
-
-    <div class="container">
-        <video id="video" autoplay playsinline></video>
-        <canvas id="canvas"></canvas>
-        <div id="warning"></div>
-        
-        <div id="controls">
-            <div class="timer" id="exercise-time">00:00</div>
-            <button id="start-button" class="button start">Start</button>
-            <button id="stop-button" class="button stop hidden">Stop</button>
-            <button id="reset-button" class="button reset hidden">Reset</button>
-        </div>
-        
-        <div id="results">
-            <h2>Exercise Results</h2>
-            <p>Total exercise time: <span id="total-time">00:00</span></p>
-            <p>Total mistakes: <span id="mistake-count">0</span></p>
-            <p>Mistakes per minute: <span id="mistake-rate">0</span></p>
-            <button id="close-results" class="button close">Close</button>
-        </div>
-    </div>
-    
-    <script>
-        // DOM Elements
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const warningText = document.getElementById('warning');
-        const exerciseTimeElement = document.getElementById('exercise-time');
-        const totalTimeElement = document.getElementById('total-time');
-        const mistakeCountElement = document.getElementById('mistake-count');
-        const mistakeRateElement = document.getElementById('mistake-rate');
-        const startButton = document.getElementById('start-button');
-        const stopButton = document.getElementById('stop-button');
-        const resetButton = document.getElementById('reset-button');
-        const resultsPanel = document.getElementById('results');
-        const closeResultsButton = document.getElementById('close-results');
-        const loadingScreen = document.getElementById('loading-screen');
-        const loadingText = document.getElementById('loading-text');
-        
-        // State variables
-        let mistakeCount = 0;
-        let isInMistakeState = false;
-        let exerciseStartTime = 0;
-        let exerciseTimer;
-        let isExercising = false;
-        let totalExerciseTime = 0;
-        let pose;
-        let camera;
-        let audio;
-        
-        // Load libraries asynchronously
-        async function loadLibraries() {
-            loadingText.textContent = "Loading MediaPipe libraries...";
-            
-            // Load scripts asynchronously
-            const scripts = [
-                'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js',
-                'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466934/drawing_utils.js',
-                'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js'
-            ];
-            
-            const loadPromises = scripts.map(src => {
-                return new Promise((resolve, reject) => {
-                    const script = document.createElement('script');
-                    script.src = src;
-                    script.onload = () => resolve();
-                    script.onerror = () => reject(`Failed to load ${src}`);
-                    document.head.appendChild(script);
-                });
-            });
-            
-            try {
-                await Promise.all(loadPromises);
-                loadingText.textContent = "Libraries loaded. Initializing pose detection...";
-                await initializePoseDetection();
-            } catch (error) {
-                loadingText.textContent = `Error: ${error}`;
-                console.error(error);
-            }
-        }
-        
-        // Initialize pose detection
-        async function initializePoseDetection() {
-            // Preload audio
-            audio = new Audio('elbow_forward.mp3');
-            audio.preload = 'auto';
-            
-            // Initialize pose detection with reduced complexity
-            pose = new Pose({
-                locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
-            });
-            
-            pose.setOptions({
-                modelComplexity: 0, // Using lighter model
-                smoothLandmarks: true,
-                minDetectionConfidence: 0.5,
-                minTrackingConfidence: 0.5
-            });
-            
-            pose.onResults(onPoseResults);
-            
-            // Load camera after pose detection is ready
-            loadingText.textContent = "Accessing camera...";
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                
-                // Wait for video to be ready
-                await new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        resolve();
-                    };
-                });
-                
-                // Start camera
-                camera = new Camera(video, {
-                    onFrame: async () => { await pose.send({ image: video }); },
-                    width: 640,
-                    height: 480
-                });
-                
-                await camera.start();
-                loadingScreen.style.display = 'none';
-            } catch (error) {
-                loadingText.textContent = `Camera error: ${error.message}`;
-                console.error(error);
-            }
-        }
-        
-        // Button event listeners
-        startButton.addEventListener('click', startExercise);
-        stopButton.addEventListener('click', stopExercise);
-        resetButton.addEventListener('click', resetExercise);
-        closeResultsButton.addEventListener('click', closeResults);
-        
-        function startExercise() {
-            isExercising = true;
-            mistakeCount = 0;
-            isInMistakeState = false;
-            
-            // Update UI
-            startButton.classList.add('hidden');
-            stopButton.classList.remove('hidden');
-            resetButton.classList.add('hidden');
-            
-            // Start timer
-            exerciseStartTime = Date.now();
-            exerciseTimer = setInterval(updateExerciseTime, 1000);
-        }
-        
-        function stopExercise() {
-            isExercising = false;
-            clearInterval(exerciseTimer);
-            
-            // Calculate total time in seconds
-            totalExerciseTime = Math.floor((Date.now() - exerciseStartTime) / 1000);
-            
-            // Update UI
-            stopButton.classList.add('hidden');
-            resetButton.classList.remove('hidden');
-            
-            // Show results
-            displayResults();
-        }
-        
-        function resetExercise() {
-            // Update UI
-            resetButton.classList.add('hidden');
-            startButton.classList.remove('hidden');
-            exerciseTimeElement.textContent = "00:00";
-            warningText.innerText = "";
-        }
-        
-        function displayResults() {
-            // Format total time
-            const minutes = Math.floor(totalExerciseTime / 60);
-            const seconds = totalExerciseTime % 60;
-            totalTimeElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-            
-            // Update mistake count
-            mistakeCountElement.textContent = mistakeCount;
-            
-            // Calculate mistakes per minute
-            const mistakesPerMinute = totalExerciseTime > 0 ? 
-                ((mistakeCount / totalExerciseTime) * 60).toFixed(2) : 0;
-            mistakeRateElement.textContent = mistakesPerMinute;
-            
-            // Show results panel
-            resultsPanel.style.display = 'block';
-        }
-        
-        function closeResults() {
-            resultsPanel.style.display = 'none';
-        }
-        
-        function updateExerciseTime() {
-            const elapsedTime = Math.floor((Date.now() - exerciseStartTime) / 1000);
-            const minutes = Math.floor(elapsedTime / 60);
-            const seconds = elapsedTime % 60;
-            exerciseTimeElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        }
-        
-        function calculateAngle(a, b, c) {
-            const ba = { x: a.x - b.x, y: a.y - b.y };
-            const bc = { x: c.x - b.x, y: c.y - b.y };
-            const dotProduct = ba.x * bc.x + ba.y * bc.y;
-            const magnitudeBA = Math.sqrt(ba.x ** 2 + ba.y ** 2);
-            const magnitudeBC = Math.sqrt(bc.x ** 2 + bc.y ** 2);
-            const angle = Math.acos(dotProduct / (magnitudeBA * magnitudeBC)) * (180 / Math.PI);
-            return angle;
-        }
-        
-        function onPoseResults(results) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            if (results.poseLandmarks) {
-                drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
-                drawLandmarks(ctx, results.poseLandmarks, { color: '#FF0000', lineWidth: 2 });
-
-                const landmarks = results.poseLandmarks;
-
-                const leftShoulder = landmarks[11]; 
-                const rightShoulder = landmarks[12];
-                const leftElbow = landmarks[13]; 
-                const rightElbow = landmarks[14];
-
-                const midpointShoulder = { 
-                    x: (leftShoulder.x + rightShoulder.x) / 2, 
-                    y: (leftShoulder.y + rightShoulder.y) / 2 
-                };
-
-                const leftElbowAngle = calculateAngle(leftShoulder, midpointShoulder, leftElbow);
-                const rightElbowAngle = calculateAngle(rightShoulder, midpointShoulder, rightElbow);
-
-                // Display angles (visible regardless of exercise state)
-                ctx.fillStyle = "white";
-                ctx.font = "18px Arial";
-                ctx.fillText(`Left Elbow: ${Math.round(leftElbowAngle)}°`, 50, 50);
-                ctx.fillText(`Right Elbow: ${Math.round(rightElbowAngle)}°`, 400, 50);
-
-                // Only count mistakes if we're in an active exercise
-                if (isExercising) {
-                    // Check for mistakes
-                    const isMistake = leftElbowAngle < 30 || leftElbowAngle > 60 || rightElbowAngle < 30 || rightElbowAngle > 60;
-                    
-                    // Only count as a new mistake if transitioning from correct to incorrect form
-                    if (isMistake && !isInMistakeState) {
-                        mistakeCount++;
-                        
-                        // Show warning (but not mistake count)
-                        warningText.innerText = "Elbow Too Forward!";
-                        
-                        // Play audio if available
-                        if (audio && audio.paused) {
-                            audio.play();
-                        }
-                        
-                        isInMistakeState = true;
-                    } else if (!isMistake) {
-                        warningText.innerText = "";
-                        isInMistakeState = false;
-                    }
-                }
-            }
-        }
-        
-        // Start loading sequence
-        document.addEventListener('DOMContentLoaded', loadLibraries);
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hammer Curl Pose Detection</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
@@ -341,15 +12,9 @@
         .container { position: relative; width: 100%; height: 100vh; }
         video, canvas { position: absolute; left: 50%; transform: translateX(-50%); top: 10%; }
         #warning { position: absolute; top: 5%; left: 50%; transform: translateX(-50%); color: red; font-size: 24px; font-weight: bold; }
-        #controls { position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%); background-color: rgba(0,0,0,0.5); color: white; padding: 10px 20px; border-radius: 10px; }
-        #results { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0,0,0,0.8); color: white; padding: 20px; border-radius: 10px; display: none; z-index: 10; min-width: 300px; }
-        .button { padding: 10px 20px; margin: 0 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        .start { background-color: #4CAF50; color: white; }
-        .stop { background-color: #f44336; color: white; }
-        .reset { background-color: #2196F3; color: white; }
-        .close { background-color: #555; color: white; margin-top: 15px; }
-        .timer { font-size: 24px; margin: 10px 0; }
-        .hidden { display: none; }
+        #stats { position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%); background-color: rgba(0,0,0,0.5); color: white; padding: 10px 20px; border-radius: 10px; }
+        #reset { position: absolute; bottom: 2%; left: 50%; transform: translateX(-50%); padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #reset:hover { background-color: #45a049; }
     </style>
 </head>
 <body>
@@ -357,55 +22,39 @@
         <video id="video" autoplay playsinline></video>
         <canvas id="canvas"></canvas>
         <div id="warning"></div>
-        
-        <div id="controls">
-            <div class="timer" id="exercise-time">00:00</div>
-            <button id="start-button" class="button start">Start</button>
-            <button id="stop-button" class="button stop hidden">Stop</button>
-            <button id="reset-button" class="button reset hidden">Reset</button>
+        <div id="stats">
+            <div>Mistakes: <span id="mistake-count">0</span></div>
+            <div>Current exercise time: <span id="exercise-time">0:00</span></div>
         </div>
-        
-        <div id="results">
-            <h2>Exercise Results</h2>
-            <p>Total exercise time: <span id="total-time">00:00</span></p>
-            <p>Total mistakes: <span id="mistake-count">0</span></p>
-            <p>Mistakes per minute: <span id="mistake-rate">0</span></p>
-            <button id="close-results" class="button close">Close</button>
-        </div>
-        
-        <audio id="audio" src="elbow_forward.mp3" preload="auto"></audio>
+        <button id="reset">Reset Counter</button>
+        <audio id="audio" src="elbow_forward.mp3" preload="auto"></audio> <!-- Preload audio -->
     </div>
     
     <script>
-        // DOM Elements
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const warningText = document.getElementById('warning');
         const audio = document.getElementById('audio');
-        const exerciseTimeElement = document.getElementById('exercise-time');
-        const totalTimeElement = document.getElementById('total-time');
         const mistakeCountElement = document.getElementById('mistake-count');
-        const mistakeRateElement = document.getElementById('mistake-rate');
-        const startButton = document.getElementById('start-button');
-        const stopButton = document.getElementById('stop-button');
-        const resetButton = document.getElementById('reset-button');
-        const resultsPanel = document.getElementById('results');
-        const closeResultsButton = document.getElementById('close-results');
+        const exerciseTimeElement = document.getElementById('exercise-time');
+        const resetButton = document.getElementById('reset');
         
-        // State variables
+        // Counter variables
         let mistakeCount = 0;
         let isInMistakeState = false;
-        let exerciseStartTime = 0;
+        let exerciseStartTime = Date.now();
         let exerciseTimer;
-        let isExercising = false;
-        let totalExerciseTime = 0;
         
-        // Initialize pose detection
+        // Start the exercise timer
+        startExerciseTimer();
+        
+        // Reset button event listener
+        resetButton.addEventListener('click', resetCounters);
+        
         const pose = new Pose({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}` });
-        pose.setOptions({ modelComplexity: 0, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
-        
-        // Setup camera
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
         navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
             video.srcObject = stream;
             video.onloadedmetadata = () => {
@@ -413,80 +62,7 @@
                 canvas.height = video.videoHeight;
             };
         });
-        
-        // Button event listeners
-        startButton.addEventListener('click', startExercise);
-        stopButton.addEventListener('click', stopExercise);
-        resetButton.addEventListener('click', resetExercise);
-        closeResultsButton.addEventListener('click', closeResults);
-        
-        function startExercise() {
-            isExercising = true;
-            mistakeCount = 0;
-            isInMistakeState = false;
-            
-            // Update UI
-            startButton.classList.add('hidden');
-            stopButton.classList.remove('hidden');
-            resetButton.classList.add('hidden');
-            
-            // Start timer
-            exerciseStartTime = Date.now();
-            exerciseTimer = setInterval(updateExerciseTime, 1000);
-        }
-        
-        function stopExercise() {
-            isExercising = false;
-            clearInterval(exerciseTimer);
-            
-            // Calculate total time in seconds
-            totalExerciseTime = Math.floor((Date.now() - exerciseStartTime) / 1000);
-            
-            // Update UI
-            stopButton.classList.add('hidden');
-            resetButton.classList.remove('hidden');
-            
-            // Show results
-            displayResults();
-        }
-        
-        function resetExercise() {
-            // Update UI
-            resetButton.classList.add('hidden');
-            startButton.classList.remove('hidden');
-            exerciseTimeElement.textContent = "00:00";
-            warningText.innerText = "";
-        }
-        
-        function displayResults() {
-            // Format total time
-            const minutes = Math.floor(totalExerciseTime / 60);
-            const seconds = totalExerciseTime % 60;
-            totalTimeElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-            
-            // Update mistake count
-            mistakeCountElement.textContent = mistakeCount;
-            
-            // Calculate mistakes per minute
-            const mistakesPerMinute = totalExerciseTime > 0 ? 
-                ((mistakeCount / totalExerciseTime) * 60).toFixed(2) : 0;
-            mistakeRateElement.textContent = mistakesPerMinute;
-            
-            // Show results panel
-            resultsPanel.style.display = 'block';
-        }
-        
-        function closeResults() {
-            resultsPanel.style.display = 'none';
-        }
-        
-        function updateExerciseTime() {
-            const elapsedTime = Math.floor((Date.now() - exerciseStartTime) / 1000);
-            const minutes = Math.floor(elapsedTime / 60);
-            const seconds = elapsedTime % 60;
-            exerciseTimeElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        }
-        
+
         function calculateAngle(a, b, c) {
             const ba = { x: a.x - b.x, y: a.y - b.y };
             const bc = { x: c.x - b.x, y: c.y - b.y };
@@ -520,34 +96,30 @@
                 const leftElbowAngle = calculateAngle(leftShoulder, midpointShoulder, leftElbow);
                 const rightElbowAngle = calculateAngle(rightShoulder, midpointShoulder, rightElbow);
 
-                // Display angles (visible regardless of exercise state)
+                // Display angles
                 ctx.fillStyle = "white";
                 ctx.font = "18px Arial";
                 ctx.fillText(`Left Elbow: ${Math.round(leftElbowAngle)}°`, 50, 50);
                 ctx.fillText(`Right Elbow: ${Math.round(rightElbowAngle)}°`, 400, 50);
 
-                // Only count mistakes if we're in an active exercise
-                if (isExercising) {
-                    // Check for mistakes
-                    const isMistake = leftElbowAngle < 30 || leftElbowAngle > 60 || rightElbowAngle < 30 || rightElbowAngle > 60;
+                // Check for mistakes
+                const isMistake = leftElbowAngle < 30 || leftElbowAngle > 60 || rightElbowAngle < 30 || rightElbowAngle > 60;
+                
+                // Only count as a new mistake if transitioning from correct to incorrect form
+                if (isMistake && !isInMistakeState) {
+                    mistakeCount++;
+                    mistakeCountElement.textContent = mistakeCount;
+                    warningText.innerText = "Elbow Too Forward!";
                     
-                    // Only count as a new mistake if transitioning from correct to incorrect form
-                    if (isMistake && !isInMistakeState) {
-                        mistakeCount++;
-                        
-                        // Show warning (but not mistake count)
-                        warningText.innerText = "Elbow Too Forward!";
-                        
-                        // Play audio if available
-                        if (audio.paused) {
-                            audio.play();
-                        }
-                        
-                        isInMistakeState = true;
-                    } else if (!isMistake) {
-                        warningText.innerText = "";
-                        isInMistakeState = false;
+                    // Play audio if available
+                    if (audio.paused) {
+                        audio.play();
                     }
+                    
+                    isInMistakeState = true;
+                } else if (!isMistake) {
+                    warningText.innerText = "";
+                    isInMistakeState = false;
                 }
             }
         });
@@ -558,6 +130,32 @@
             height: 480
         });
         camera.start();
+        
+        function startExerciseTimer() {
+            exerciseStartTime = Date.now();
+            exerciseTimer = setInterval(updateExerciseTime, 1000);
+        }
+        
+        function updateExerciseTime() {
+            const elapsedTime = Math.floor((Date.now() - exerciseStartTime) / 1000);
+            const minutes = Math.floor(elapsedTime / 60);
+            const seconds = elapsedTime % 60;
+            exerciseTimeElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        function resetCounters() {
+            // Reset mistake counter
+            mistakeCount = 0;
+            mistakeCountElement.textContent = '0';
+            
+            // Reset exercise timer
+            clearInterval(exerciseTimer);
+            startExerciseTimer();
+            
+            // Reset warning
+            warningText.innerText = "";
+            isInMistakeState = false;
+        }
     </script>
 </body>
 </html>
